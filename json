@@ -1,0 +1,17 @@
+{
+  "sender_email": "sender_email@example.com",
+  "data": [
+    {
+      "email_destinatario": "destinatario1@example.com",
+      "id_retorno": "12345",
+      "mensagem_enviada": "<html><body><h1>Olá!</h1><p>Segue a notificação importante.</p></body></html>",
+      "include_attachments": true
+    },
+    {
+      "email_destinatario": "destinatario2@example.com",
+      "id_retorno": "67890",
+      "mensagem_enviada": "<html><body><h1>Notificação</h1><p>Por favor, confira os detalhes no anexo.</p></body></html>",
+      "include_attachments": false
+    }
+  ]
+}
