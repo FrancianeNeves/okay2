@@ -1,17 +1,17 @@
 {
-    "sender_email": "seu_email@dominio.com",
-    "data": [
-        {
-            "email_destinatario": "destinatario1@dominio.com",
-            "id_retorno": "12345",
-            "mensagem_enviada": "Olá, este é um teste de notificação.",
-            "anexo": "teste.pdf"
-        },
-        {
-            "email_destinatario": "destinatario2@dominio.com",
-            "id_retorno": "67890",
-            "mensagem_enviada": "Notificação de teste para outro destinatário.",
-            "anexo": "exemplo.csv"
-        }
-    ]
+  "sender_email": "seu-email@dominio.com",
+  "data": [
+    {
+      "email_destinatario": "destinatario1@dominio.com",
+      "id_retorno": "12345",
+      "mensagem_enviada": "Aqui está a sua mensagem com o anexo.",
+      "anexo": "documento1.pdf"
+    },
+    {
+      "email_destinatario": "destinatario2@dominio.com",
+      "id_retorno": "67890",
+      "mensagem_enviada": "Outra mensagem, agora com um anexo diferente.",
+      "anexo": "documento2.pdf"
+    }
+  ]
 }
