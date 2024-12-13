@@ -18,12 +18,12 @@ TABLE_NAME = "tbciar_tr_ses_teste"
 DOCUMENTS_S3_PATH = "s3://cielo-sdlf-dev-sa-east-1-445989609784-raw/cia/documentos-ses"
 PARQUET_S3_PATH = "s3://cielo-sdlf-dev-sa-east-1-445989609784-raw/cia/tbciar_tr_ses_teste"
 
-
 def get_s3_attachment(bucket, file_key):
     """
     Obter um arquivo específico do S3 como anexo.
     """
     try:
+        logger.info(f"Obtendo anexo do S3: bucket={bucket}, file_key={file_key}")
         file_obj = s3_client.get_object(Bucket=bucket, Key=file_key)
         attachment = {
             'Name': os.path.basename(file_key),
@@ -34,7 +34,6 @@ def get_s3_attachment(bucket, file_key):
     except Exception as e:
         logger.error(f"Erro ao obter o anexo do S3: {e}")
         return None
-
 
 def send_email(sender_email, email_destinatario, subject, body, attachment=None, is_html=False):
     """
@@ -64,6 +63,7 @@ def send_email(sender_email, email_destinatario, subject, body, attachment=None,
             msg.attach(part)
 
         # Enviar o e-mail
+        logger.info(f"Enviando e-mail para {email_destinatario} com o assunto: {subject}")
         ses_client.send_raw_email(
             Source=sender_email,
             Destinations=[email_destinatario],
@@ -73,22 +73,26 @@ def send_email(sender_email, email_destinatario, subject, body, attachment=None,
         return None  # Nenhum erro ocorreu
 
     except Exception as e:
+        logger.error(f"Erro ao enviar o e-mail: {e}")
         return str(e)  # Retorna a mensagem de erro
-
 
 def lambda_handler(event, context):
     """
     Função Lambda para gravar dados no formato Parquet no Athena e S3 e enviar e-mails via SES.
     """
     try:
+        logger.info("Iniciando processamento da Lambda.")
+
         # Verificar se o remetente do e-mail foi enviado
         if 'sender_email' not in event:
+            logger.error("Parâmetro 'sender_email' é obrigatório.")
             return {"statusCode": 400, "message": "Parâmetro 'sender_email' é obrigatório."}
 
         sender_email = event['sender_email']
 
         # Obter os dados do evento
         if 'data' not in event:
+            logger.error("Parâmetro 'data' é obrigatório.")
             return {"statusCode": 400, "message": "Parâmetro 'data' é obrigatório."}
 
         data = event['data']
@@ -97,6 +101,7 @@ def lambda_handler(event, context):
         required_fields = ["email_destinatario", "id_retorno", "mensagem_enviada", "anexo"]
         for record in data:
             if not all(field in record for field in required_fields):
+                logger.error(f"Campos obrigatórios ausentes em um registro: {record}")
                 return {"statusCode": 400, "message": f"Todos os campos {required_fields} são obrigatórios."}
 
         # Processar cada registro e enviar e-mails
@@ -132,6 +137,8 @@ def lambda_handler(event, context):
         df.to_parquet(parquet_buffer, index=False)
         s3_client.put_object(Bucket=PARQUET_S3_PATH.split('/')[2], Key=f"{PARQUET_S3_PATH.split('/', 3)[-1]}/{file_name}", Body=parquet_buffer.getvalue())
 
+        logger.info(f"Dados salvos no S3: {parquet_path}")
+
         return {
             "statusCode": 200,
             "message": "Dados processados e e-mails enviados com sucesso.",
@@ -139,6 +146,7 @@ def lambda_handler(event, context):
         }
 
     except Exception as e:
+        logger.error(f"Erro durante o processamento: {e}")
         return {
             "statusCode": 500,
             "message": str(e)
