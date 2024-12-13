@@ -1,0 +1,178 @@
+## -*- coding: utf-8 -*-
+import boto3
+import logging
+import pandas as pd
+from datetime import datetime
+import io
+import os
+import awswrangler as wr
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Inicializar clientes S3 e SES
+s3_client = boto3.client('s3')
+ses_client = boto3.client('ses')
+
+# Configuração da tabela e do S3
+DATABASE = "cia"
+TABLE_NAME = "tbciar_tr_ses_teste"
+S3_LOCATION = "s3://cielo-sdlf-dev-sa-east-1-445989609784-raw/cia/documentos-ses"
+RAW_BUCKET = os.environ['RAW_BUCKET']
+PREFIX = "cia/tbciar_tr_ses_teste"
+
+def get_s3_attachments(s3_path):
+    """
+    Função para obter anexos de um caminho no S3.
+    """
+    attachments = []
+    try:
+        bucket_name, prefix = s3_path.replace("s3://", "").split("/", 1)
+        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                file_key = obj['Key']
+                file_obj = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+                attachments.append({
+                    'Name': os.path.basename(file_key),
+                    'Data': file_obj['Body'].read(),
+                    'Type': file_key.split('.')[-1]
+                })
+        
+    except ClientError as e:
+        logger.error(f"Erro ao obter anexos do S3: {e}")
+    
+    return attachments
+
+def send_email(sender_email, email_destinatario, subject, body, attachments=None, is_html=False):
+    """
+    Função para enviar e-mails via AWS SES com suporte a HTML e anexos.
+    """
+    try:
+        # Configurar o corpo do e-mail
+        body_content = {'Text': {'Data': body, 'Charset': 'UTF-8'}}
+        if is_html:
+            body_content['Html'] = {'Data': body, 'Charset': 'UTF-8'}
+
+        # Configuração básica do e-mail
+        email_params = {
+            'Source': sender_email,
+            'Destination': {'ToAddresses': [email_destinatario]},
+            'Message': {
+                'Subject': {'Data': subject, 'Charset': 'UTF-8'},
+                'Body': body_content
+            }
+        }
+
+        # Incluir anexos, se existirem
+        if attachments:
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+            from email.mime.base import MIMEBase
+            from email import encoders
+
+            msg = MIMEMultipart()
+            msg['Subject'] = subject
+            msg['From'] = sender_email
+            msg['To'] = email_destinatario
+
+            # Corpo do e-mail
+            msg.attach(MIMEText(body, 'html' if is_html else 'plain'))
+
+            # Adicionar anexos
+            for attachment in attachments:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(attachment['Data'])
+                encoders.encode_base64(part)
+                part.add_header('Content-Disposition', f"attachment; filename={attachment['Name']}")
+                msg.attach(part)
+
+            # Converter para string
+            email_params['RawMessage'] = {'Data': msg.as_string()}
+            ses_client.send_raw_email(**email_params)
+        else:
+            ses_client.send_email(**email_params)
+
+        return None  # Nenhum erro ocorreu
+
+    except Exception as e:
+        return str(e)  # Retorna a mensagem de erro
+
+def lambda_handler(event, context):
+    """
+    Função Lambda para gravar dados no formato Parquet no Athena e S3 e enviar e-mails via SES.
+    """
+    try:
+        # Verificar se o remetente do e-mail foi enviado
+        if 'sender_email' not in event:
+            return {"statusCode": 400, "message": "Parâmetro 'sender_email' é obrigatório."}
+
+        # Obter o e-mail do remetente
+        sender_email = event['sender_email']
+
+        # Verificar se os dados foram enviados
+        if 'data' not in event:
+            return {"statusCode": 400, "message": "Parâmetro 'data' é obrigatório."}
+
+        # Obter os dados do evento
+        data = event['data']
+
+        # Validar os campos obrigatórios (exceto `data_envio`, que será gerado automaticamente)
+        required_fields = ["email_destinatario", "id_retorno", "mensagem_enviada"]
+        for record in data:
+            if not all(field in record for field in required_fields):
+                return {"statusCode": 400, "message": f"Todos os campos {required_fields} são obrigatórios."}
+
+        # Processar cada registro e enviar e-mails
+        for record in data:
+            # Adicionar a coluna `data_envio` com o timestamp atual
+            record["data_envio"] = datetime.now().isoformat()
+
+            # Configurar o e-mail
+            email_destinatario = record["email_destinatario"]
+            subject = f"Notificação - ID de Retorno: {record['id_retorno']}"
+            body = record["mensagem_enviada"]
+
+            # Verificar se há anexos
+            attachments = get_s3_attachments(S3_LOCATION) if 'include_attachments' in record and record['include_attachments'] else None
+
+            # Tentar enviar o e-mail
+            error_message = send_email(sender_email, email_destinatario, subject, body, attachments=attachments, is_html=True)
+
+            # Registrar erro ou sucesso
+            if error_message:
+                record["mensagem_erro"] = error_message
+            else:
+                record["mensagem_erro"] = ""
+
+        # Criar DataFrame com os dados processados
+        df = pd.DataFrame(data)
+
+        # Gerar o nome do arquivo Parquet
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        file_name = f"{PREFIX}/data_{timestamp}.parquet"
+
+        # Salvar o DataFrame como Parquet em memória
+        parquet_buffer = io.BytesIO()
+        df.to_parquet(parquet_buffer, index=False)
+
+        # Gravar o arquivo Parquet no S3
+        s3_client.put_object(
+            Bucket=RAW_BUCKET,
+            Key=file_name,
+            Body=parquet_buffer.getvalue()
+        )
+
+        return {
+            "statusCode": 200,
+            "message": "Dados processados e gravados com sucesso no formato Parquet.",
+            "file": f"s3://{RAW_BUCKET}/{file_name}"
+        }
+
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "message": str(e)
+        }
